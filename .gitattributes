@@ -1,0 +1,4 @@
+# o archlab.sh roda no device: CRLF quebraria o sh
+*.sh text eol=lf
+# atalho do Windows
+*.cmd text eol=crlf

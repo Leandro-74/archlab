@@ -10,6 +10,7 @@ O objetivo é funcionar em qualquer device Android **arm64/aarch64** (e armv7, q
 
 ## Recursos
 
+- Wrapper para PC (`archlab.cmd` + `archlab.ps1`): acha o device, confere os requisitos, envia o script e roda os comandos via `adb`, sem abrir shell no celular. Sem argumentos abre o wizard (se não houver lab) ou um painel de operações (se já houver).
 - Wizard interativo com valores padrão (pasta, arquitetura, mirror, hostname, timezone, locale, usuário, senha).
 - Modo 100% não-interativo com flags ou arquivo de config.
 - Instalação resumível: se falhar, rode `install` de novo.
@@ -44,21 +45,75 @@ O objetivo é funcionar em qualquer device Android **arm64/aarch64** (e armv7, q
 - Kernel com `proc`, `sysfs`, `tmpfs` e, idealmente, `devpts`.
 - `chroot` disponível no toybox ou busybox.
 
+No PC, só para usar o wrapper (`archlab.cmd`): `adb` (platform-tools) no PATH, PowerShell 5.1+ e depuração USB autorizada no celular.
+
 > O rootfs **precisa** ficar em `/data` (ext4/f2fs). Não instale em `/sdcard`, `/storage` ou cartão exFAT/FAT: esses mounts são FUSE e não preservam dono/permissões/suid.
 
 ---
 
-## Início rápido
+## Início rápido (Windows)
 
-### 1. Baixar o script
+Com o celular conectado por USB e a depuração USB autorizada:
 
-No PC:
-
-```sh
+```bat
 git clone https://github.com/Leandro-74/archinstaller-chroot.git
 cd archinstaller-chroot
-adb push archlab.sh /data/local/tmp/archlab.sh
+.\archlab.cmd
 ```
+
+(No `cmd.exe`, `archlab.cmd` também funciona sem o `.\`.)
+
+O `archlab.cmd` faz o trabalho chato:
+
+1. encontra o device (ou pede `-s SERIAL` se houver mais de um);
+2. confere root, arquitetura, `chroot`, `tar`, espaço em `/data`, download e SELinux;
+3. envia o `archlab.sh` para `/data/local/tmp/archlab/`;
+4. roda o comando como root, repassando os argumentos;
+5. envia e reescreve os caminhos de arquivos locais (`--config`, `--ssh-key`, `--rootfs`).
+
+Sem argumentos, ele decide o que fazer:
+
+- **sem lab instalado** → abre o wizard;
+- **com lab instalado** → abre o painel: status, shell, `exec`, pacman, doctor, logs, backup, pull, start/stop, reconfigurar, SSH via USB (abre um terminal já conectado), energia/boot (wakelock, autostart, Tailscale) e uninstall. O cabeçalho mostra o estado atual (wakelock e autostart).
+
+O wizard roda no celular, mas você responde tudo na janela do PC. Nada de `adb shell` + `su -c`.
+
+```bat
+.\archlab.cmd menu                :: abre o painel (mesmo sem argumentos)
+.\archlab.cmd doctor              :: diagnóstico completo
+.\archlab.cmd status              :: estado e comandos de SSH
+.\archlab.cmd shell               :: shell root dentro do chroot
+.\archlab.cmd install --yes --config .\meu.env
+.\archlab.cmd backup              :: cria o .tar.gz no celular
+.\archlab.cmd pull                :: baixa o backup mais novo para o PC
+.\archlab.cmd forward 2222        :: SSH via USB em localhost:2222
+.\archlab.cmd logs 100            :: últimas linhas do log
+.\archlab.cmd devices             :: device + requisitos
+.\archlab.cmd -h                  :: ajuda do wrapper
+```
+
+Opções do wrapper (não vão para o device):
+
+```text
+-s, --serial SERIAL   escolhe o device
+    --adb CAMINHO     caminho do adb
+    --file CAMINHO    outro archlab.sh local a enviar
+    --no-push         não reenvia o script
+    --tty / --no-tty  força/desliga o terminal interativo
+```
+
+Qualquer outro argumento é repassado ao `archlab.sh` (a lista completa do `install` aparece em `archlab.cmd help`).
+
+### Instalação manual (sem o wrapper)
+
+```sh
+adb push archlab.sh /data/local/tmp/archlab.sh
+adb shell
+su -c "sh /data/local/tmp/archlab.sh doctor"
+su -c "sh /data/local/tmp/archlab.sh install"
+```
+
+Corrija o que o `doctor` mostrar como falha crítica antes de continuar; avisos sobre `devpts` e namespace podem ser contornados pelo próprio instalador.
 
 Ou direto no device (Termux/outro shell com curl):
 
@@ -67,22 +122,7 @@ curl -fsSL -o /data/local/tmp/archlab.sh \
   https://raw.githubusercontent.com/Leandro-74/archinstaller-chroot/main/archlab.sh
 ```
 
-### 2. Rodar o diagnóstico
-
-```sh
-adb shell
-su -c "sh /data/local/tmp/archlab.sh doctor"
-```
-
-Corrija o que aparecer como falha crítica antes de continuar. Avisos sobre `devpts` e namespace podem ser contornados pelo próprio instalador.
-
-### 3. Instalar
-
-```sh
-su -c "sh /data/local/tmp/archlab.sh install"
-```
-
-O wizard pergunta:
+O wizard (tanto pelo wrapper quanto no modo manual) pergunta:
 
 1. pasta de instalação;
 2. arquitetura (`aarch64`/`armv7`);
@@ -97,7 +137,7 @@ O wizard pergunta:
 
 No fim ele mostra um resumo e pede confirmação.
 
-### 4. Acessar
+### Acessar
 
 Se o SSH estiver habilitado, o instalador mostra os comandos. Exemplos:
 
@@ -106,19 +146,22 @@ Se o SSH estiver habilitado, o instalador mostra os comandos. Exemplos:
 ssh -p 2222 lab@192.168.0.123
 
 # via USB (sem depender do Wi-Fi)
-adb forward tcp:2222 tcp:2222
+adb forward tcp:2222 tcp:2222     # ou, no PC: archlab.cmd forward 2222
 ssh -p 2222 lab@127.0.0.1
 
 # shell local, sem SSH
 su -c "sh /data/local/archlab/archlab.sh shell"
 ```
 
-Dentro do Arch:
+Dentro do Arch, o `labctl` (instalado pelo `archlab.sh`) executa os comandos de controle do Android — útil pelo SSH:
 
 ```sh
 sudo pacman -Syu
-sudo labctl status
-sudo labctl poweroff
+
+sudo labctl status      # estado do lab
+sudo labctl wake        # segura o wakelock (celular acordado)
+sudo labctl standby     # libera o wakelock (pode dormir)
+sudo labctl poweroff    # para o lab; so volta rodando start no Android
 ```
 
 ---
@@ -175,6 +218,15 @@ adb push config.example.env /sdcard/Download/archlab.env
 su -c "sh archlab.sh install --config /sdcard/Download/archlab.env --yes"
 ```
 
+No Windows o wrapper já envia o arquivo e troca o caminho sozinho:
+
+```bat
+copy config.example.env meu.env
+archlab.cmd install --yes --config .\meu.env
+```
+
+O mesmo vale para `--ssh-key` e `--rootfs` (tarball local): passe o caminho do PC e o `archlab.cmd` envia antes de rodar.
+
 O arquivo é um shell script (`VAR=valor`). Senhas e `TS_AUTHKEY` não são gravados no `config.env` por padrão; use `--save-secrets` apenas se souber o risco.
 
 Rodar `install` de novo com a mesma config continua a instalação. Se você mudar hostname, mirror, usuário, pacotes ou SSH e rodar de novo, as etapas correspondentes são reaplicadas; o rootfs e os dados não são apagados. `--force` apaga o rootfs e começa do zero.
@@ -208,6 +260,8 @@ Rodar `install` de novo com a mesma config continua a instalação. Se você mud
 | `uninstall` | remove o Arch (pede confirmação) |
 | `ip` | mostra os comandos de SSH |
 | `help` | ajuda |
+
+Do PC, troque `sh archlab.sh` por `archlab.cmd` nos exemplos acima. O wrapper ainda adiciona `devices`, `logs [n]`, `forward [porta]` e `pull [arquivo] [local]` (baixa o backup para o PC).
 
 Flags do `install` (resumo):
 
@@ -332,6 +386,8 @@ su -c "sh archlab.sh wake"
 su -c "sh archlab.sh standby"
 ```
 
+Os mesmos controles estão no painel do PC (opção `13) energia/boot`) e dentro do Arch via `sudo labctl wake|standby|status`.
+
 O autostart grava `/data/adb/service.d/99-archlab.sh`, espera `sys.boot_completed`, espera `BOOT_DELAY` segundos (padrão 30) e roda `start`. Log em `/data/local/archlab/boot.log`.
 
 - Funciona em Magisk/KernelSU/APatch que executam `service.d`.
@@ -415,6 +471,7 @@ Logs:
 - `--password`/`TS_AUTHKEY` podem aparecer no histórico do shell ou em `ps`; prefira o wizard.
 - O arquivo `credentials` (quando a senha é gerada) fica em modo 600.
 - `--save-secrets` grava o `TS_AUTHKEY` no `config.env`; use com cuidado.
+- O wrapper envia o script/config para `/data/local/tmp/archlab` (gravável pelo shell do `adb`); ao rodar como root, o `archlab.sh` se copia para `/data/local/archlab` com modo 700.
 
 ---
 
@@ -427,6 +484,10 @@ config/detecção -> logs/lock/run -> mounts -> download/extração
 -> config do rootfs -> pacotes -> usuários -> SSH/serviços
 -> wizard/flags -> comandos -> doctor/main
 ```
+
+O `archlab.ps1` é só o bootstrap do PC (não instala nada): acha o `adb`, escolhe o device, envia o `archlab.sh` e o `preflight.sh` para `/data/local/tmp/archlab/`, roda o preflight como root e executa o comando via `su -c 'sh /data/local/tmp/archlab/run.sh'`. Os argumentos são escapados em um `run.sh` no device (`'...'` com `'\''`), então não dependem do quoting do `adb shell`.
+
+Detalhe de implementação: os comandos de apoio do adb recebem um stdin próprio (`'' | adb ...`), senão o `adb shell` do preflight consome a entrada destinada ao comando final — é isso que permite `Get-Content respostas.txt | .\archlab.cmd install --interactive`.
 
 Para testar sintaxe:
 
@@ -453,7 +514,8 @@ Contribuições úteis:
 
 ## Arquivos
 
-- `archlab.sh` - instalador e CLI (arquivo único).
+- `archlab.sh` - instalador e CLI (arquivo único, roda no Android).
+- `archlab.cmd` / `archlab.ps1` - wrapper de PC: encontra o device via `adb`, valida requisitos, envia o script e executa os comandos.
 - `config.example.env` - modelo comentado para o modo não-interativo.
 - `README.md` - esta documentação.
 - `LICENSE` - MIT.
